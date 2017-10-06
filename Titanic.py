@@ -1,6 +1,9 @@
 import numpy as np
 import pandas as pd
 from sklearn import preprocessing, decomposition, neighbors, svm
+from sklearn.preprocessing import StandardScaler
+from sklearn.neural_network import MLPClassifier
+from sklearn.metrics import classification_report,confusion_matrix
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -12,7 +15,8 @@ class Titanic(object):
     """
     def __init__(self,
             method='mean',
-            nondimen='scale',
+            nondimen='bypassed',
+            standard=True,
             pca=True,
             n_components='mle',
             svd_solver='full',
@@ -35,7 +39,7 @@ class Titanic(object):
         # 缺失值计算
         self.missing_value_calculation(method=method)
         # 数据预处理
-        self.data_preprocessing(nondimen=nondimen)
+        self.data_preprocessing(nondimen=nondimen, standard=standard)
         # 特征选择
         self.feature_selection(pca=pca, n_components=n_components, svd_solver=svd_solver)
         # 采样
@@ -123,7 +127,7 @@ class Titanic(object):
         self.test = missing_value(self.test)
 
     """数据预处理"""
-    def data_preprocessing(self, nondimen='scale'):
+    def data_preprocessing(self, nondimen='bypassed', standard=True):
         # 对定量特征二值化
         # 对定性特征亚编码
         # 定义处理函数
@@ -139,6 +143,9 @@ class Titanic(object):
             q = data.Embarked.map(lambda x:int(x == 'Q')).rename('Q')
             return pd.concat([s,c,q],axis=1)
         # 无量纲化
+        # 不处理
+        def bypassed(args):
+            pass
         # 标准化数据
         def scale(data):
             age = pd.DataFrame(preprocessing.scale(data.Age),columns=['Age'])
@@ -151,7 +158,8 @@ class Titanic(object):
             return pd.concat([age,fare],axis=1)
         switcher = {
             'scale':scale,
-            'normalize':normalize
+            'normalize':normalize,
+            'bypassed':bypassed
         }
         nondimen = switcher.get(nondimen)
         # 数据变换
@@ -168,6 +176,12 @@ class Titanic(object):
         self.train = data_reshape(self.train)
         self.test_survived = self.real.loc[:,['Survived']]
         self.test = data_reshape(self.test)
+        # 整体标准化
+        if standard:
+            scaler = StandardScaler()
+            scaler.fit(self.train)
+            self.train = scaler.transform(self.train)
+            self.test = scaler.transform(self.test)
 
     """特征选择"""
     def feature_selection(self, pca=True, n_components='mle', svd_solver='full'):  # n_components='mle'有问题
@@ -198,10 +212,20 @@ class Titanic(object):
             # svm
             def svm_kernel():
                 return svm.SVC()
+            # mlp
+            def mlp_kernel():
+                return MLPClassifier(
+                            hidden_layer_sizes=(
+                                16,
+                                16
+                                ),
+                            max_iter=500
+                            )
             # 选择器
             switcher = {
                 'knn':knn_kernel,
-                'svm':svm_kernel
+                'svm':svm_kernel,
+                'mlp':mlp_kernel
             }
             kernel = switcher.get(kernel)
             return kernel()
@@ -254,12 +278,23 @@ class Titanic(object):
             # 保存历史正确率
             self.accuracy_test.append(accuracy_test)
         # 训练结果
-        def train_result():
+        def train_result(clf):
             print('#'*12+'训练结果'+'#'*12+'\n')
             self.accuracy_validation = np.mean(self.accuracy_validation)
             self.accuracy_test = np.mean(self.accuracy_test)
             print('验证集平均正确率:%f\n'%(self.accuracy_validation))
             print('测试集平均正确率:%f\n'%(self.accuracy_test))
+            # 全体数据
+            # 数据变换
+            self.train_survived = np.array(self.train_survived).squeeze()
+            # 预测
+            train_predict = clf.predict(self.train)
+            # 分类报告及混淆矩阵
+            print("分类报告:")
+            print(classification_report(self.train_survived,train_predict))
+            print("混淆矩阵:")
+            print(confusion_matrix(self.train_survived,train_predict))
+
         # 实际检验结果
         def real_result(clf):
             print('#'*12+'实际结果'+'#'*12+'\n')
@@ -271,6 +306,12 @@ class Titanic(object):
             self.model_accuracy = (test_predict == self.test_survived).astype(int).mean()
             # 打印正确率
             print('实际正确率:%f\n'%(self.model_accuracy))
+            # 分类报告及混淆矩阵
+            print("分类报告:")
+            print(classification_report(self.test_survived,test_predict))
+            print("混淆矩阵:")
+            print(confusion_matrix(self.test_survived,test_predict)) 
+                
         # 模型函数实现
         # KNN
         def KNN(nn_n, times=10, echos=2):
@@ -281,7 +322,7 @@ class Titanic(object):
             # 训练模型
             self.kn_clf = model_training(self.kn_clf, times)
             # 训练结果
-            train_result()
+            train_result(self.kn_clf)
             # 实际检验结果
             real_result(self.kn_clf)
 
@@ -294,7 +335,7 @@ class Titanic(object):
             # 训练模型
             self.svm_clf = model_training(self.svm_clf,times)
             # 训练结果
-            train_result()
+            train_result(self.svm_clf)
             # 实际检验结果
             real_result(self.svm_clf)
         # NN
@@ -341,6 +382,8 @@ class Titanic(object):
             # alert
             print('#'*12+'训练模型'+'#'*12+'\n')
             for echo in range(echos):
+                # 初始化历史损失值
+                loss_previous = 0
                 # 采样
                 self.sampling()
                 # 处理数据
@@ -378,13 +421,26 @@ class Titanic(object):
                 predict = torch.round(prediction)
                 self.model_accuracy = np.mean((predict == test_survived).data.numpy())
                 print('准确率:%d'%(self.model_accuracy*100)+'%\n')
-        # else
+        # MLP
+        def MLP(nn_n, times=10, echos=2):
+            # 说明模型
+            print('#'*12+'  MLP  '+'#'*12+'\n')
+            # 建立模型
+            self.mlp_clf = model_building(kernel='mlp')
+
+            # 训练模型
+            self.mlp_clf = model_training(self.mlp_clf,times)
+            # 训练结果
+            train_result(self.mlp_clf)
+            # 实际检验结果
+            real_result(self.mlp_clf)
 
         # 选择器    
         switcher = {
             'knn':KNN,
             'svm':SVM,
-            'nn':NN
+            'nn':NN,
+            'mlp':MLP
         }
         training = switcher.get(model)
         print('\n'+'-'*12+' 分割线 '+'-'*12+'\n')
