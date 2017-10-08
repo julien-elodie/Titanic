@@ -7,10 +7,12 @@ import pandas as pd
 # pyplot
 import matplotlib.pyplot as plt
 # sklearn
+# Z-scores
+from sklearn.preprocessing import scale
 # 缺失值
 from sklearn.preprocessing import Imputer
 # 文本编号
-from sklearn.preprocessing import LabelEncoder
+# from sklearn.preprocessing import LabelEncoder
 # 分类数据扩维
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.feature_extraction import DictVectorizer
@@ -159,6 +161,7 @@ class Titanic(object):
                 svd_solver='full',
                 training_model='svm'):
         self.data_collection()
+        # self.data_cleaning()
         self.feature_extraction()
         self.missing_value_calculation(method=missing_method)
         self.binarization_processing()
@@ -231,7 +234,29 @@ class Titanic(object):
         是否完成:否
         ```
         """
-        pass
+        # Z-scores
+        # Age
+        # 标准化
+        Age_scaled = pd.DataFrame(scale(self.train.Age.dropna()), index=self.train.Age.dropna().index, columns=['Age_scaled'])
+        # 标识异常值
+        Age_scaled_drop = Age_scaled[Age_scaled>-2]
+        Age_scaled_drop = Age_scaled_drop[Age_scaled_drop<2]
+        Age_scaled_drop = Age_scaled_drop.isnull()
+        # 剔除异常值
+        self.train = pd.concat([self.train, Age_scaled_drop], axis=1)
+        self.train = self.train[self.train.Age_scaled!=True]
+        self.train = self.train.drop(['Age_scaled'], axis=1)
+        # Fare
+        # 标准化
+        Fare_scaled = pd.DataFrame(scale(self.train.Fare.dropna()), index=self.train.Fare.dropna().index, columns=['Fare_scaled'])
+        # 标识异常值
+        Fare_scaled_drop = Fare_scaled[Fare_scaled>-2]
+        Fare_scaled_drop = Fare_scaled_drop[Fare_scaled_drop<2]
+        Fare_scaled_drop = Fare_scaled_drop.isnull()
+        # 剔除异常值
+        self.train = pd.concat([self.train, Fare_scaled_drop], axis=1)
+        self.train = self.train[self.train.Fare_scaled!=True]
+        self.train = self.train.drop(['Fare_scaled'], axis=1)
     """采样"""
     def sampling(self):
         pass
@@ -342,9 +367,11 @@ class Titanic(object):
         """
         rlasso = RandomizedLasso()
         rlasso.fit(self.train,np.array(self.train_survived).ravel())
-        self.rlasso_scores = rlasso.scores_
+        self.rlasso_scores = rlasso.all_scores_
         self.train_reduced = self.train.drop(['SibSp', 'Parch', 'Pclass_2', 'Male', 'Embarked_Q'], axis=1)
+        # self.train_reduced = self.train.drop(['Age', 'SibSp', 'Parch', 'Pclass_2', 'Male', 'Embarked_Q'], axis=1)
         self.test_reduced = self.test.drop(['SibSp', 'Parch', 'Pclass_2', 'Male', 'Embarked_Q'], axis=1)
+        # self.test_reduced = self.test.drop(['Age', 'SibSp', 'Parch', 'Pclass_2', 'Male', 'Embarked_Q'], axis=1)
 
     """降维"""
     def deminsionality_reduction(self, method='lda' ,n_components=10, svd_solver='full'):
@@ -381,7 +408,7 @@ class Titanic(object):
         demin_reduce = switcher.get(method, other)
         return demin_reduce()
     """训练"""
-    def training(self, model='mlp'):
+    def training(self, model='svm'):
         """
         ```
         说明:训练模型
@@ -443,7 +470,7 @@ class Titanic(object):
             for time in range(10):
                 print('-'*12+' 第 %02d 次 '%(time+1)+'-'*12+'\n')
                 #
-                mlp = MLPClassifier(hidden_layer_sizes=(100,10),max_iter=1000)
+                mlp = MLPClassifier(hidden_layer_sizes=(25),max_iter=1000)
                 scores = cross_val_score(mlp, self.train_reduced, self.train_survived.squeeze(), cv=10, scoring='accuracy')
                 print('10折交叉验证准确率:%f\n'%(scores.mean()))
                 multi_scores.append(scores.mean())
