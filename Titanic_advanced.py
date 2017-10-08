@@ -70,7 +70,7 @@ class Titanic(object):
         13_数据清洗:
             类函数实现:data_cleaning
             参数:method
-            说明:清洗数据,待思考
+            说明:清洗数据
             是否完成:否
         14_采样:
             类函数实现:sampling
