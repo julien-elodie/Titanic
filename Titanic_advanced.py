@@ -20,9 +20,14 @@ from sklearn.feature_extraction import DictVectorizer
 from sklearn.preprocessing import Binarizer
 # 无量纲化
 from sklearn.preprocessing import MinMaxScaler
+# from sklearn.preprocessing import StandardScaler
 # 特征选择
 ## 随机Lasso
 from sklearn.linear_model import RandomizedLasso
+## SelectFromModel
+from sklearn.feature_selection import SelectFromModel
+## 随机森林
+from sklearn.ensemble import RandomForestRegressor 
 # 降维
 ## PCA
 # from sklearn.decomposition import PCA
@@ -36,13 +41,19 @@ from sklearn.svm import SVC
 ## MLP
 from sklearn.neural_network import MLPClassifier
 # 交叉验证
-# from sklearn.cross_validation import train_test_split
+from sklearn.cross_validation import train_test_split
 # from sklearn.cross_validation import KFold
 from sklearn.cross_validation import cross_val_score
 from sklearn.cross_validation import cross_val_predict
 # 度量
 from sklearn import metrics
 from sklearn.metrics import classification_report,confusion_matrix
+# 画图
+# import matplotlib.pyplot as plt
+# xgboost
+import xgboost as xgb
+# GridSearchCV
+from sklearn.model_selection import GridSearchCV
 
 
 # 定义Titanic类
@@ -112,8 +123,8 @@ class Titanic(object):
             是否完成:是
         26_特征选择:
             类函数实现:feature_selection
-            参数:无
-            说明:使用随机Lasso算法,选择特征
+            参数:method
+            说明:method选择算法,rl使用随机Lasso算法,rf使用随机森林算法
             是否完成:是
         27_降维:
             类函数实现:deminsionality_reduction
@@ -156,10 +167,11 @@ class Titanic(object):
     # 初始化
     def __init__(self,
                 missing_method='most_frequent',
+                select_method='xgbr',
                 demin_method='lda',
                 n_components=10,
                 svd_solver='full',
-                training_model='svm'):
+                training_model='xgb'):
         self.data_collection()
         # self.data_cleaning()
         self.feature_extraction()
@@ -167,10 +179,11 @@ class Titanic(object):
         self.binarization_processing()
         self.feature_coding()
         self.nondimensionalize()
-        self.feature_selection()
+        self.feature_selection(method=select_method)
         # self.deminsionality_reduction(method=demin_method, n_components=n_components, svd_solver=svd_solver)
         self.training(model=training_model)
-        self.predicting()
+        if training_model in ['knn', 'svm', 'mlp']:
+            self.predicting()
     
     """数据采集"""
     def data_collection(self):
@@ -234,7 +247,7 @@ class Titanic(object):
         是否完成:否
         ```
         """
-        # Z-scores
+        # Z-scores 清除异常值
         # Age
         # 标准化
         Age_scaled = pd.DataFrame(scale(self.train.Age.dropna()), index=self.train.Age.dropna().index, columns=['Age_scaled'])
@@ -270,10 +283,26 @@ class Titanic(object):
         是否完成:是
         ```
         """
+        # Fare
+        self.test.Fare = self.test.Fare.fillna(self.test.Fare.mean())
+
+        # Cabin
+        self.train.Cabin = self.train.Cabin.fillna('Unknown')
+        self.train.Cabin = self.train.Cabin.apply(lambda x:x[0])
+        self.test.Cabin = self.test.Cabin.fillna('Unknown')
+        self.test.Cabin = self.test.Cabin.apply(lambda x:x[0])
+
+        # FamilySize
+        self.train['FamilySize'] = self.train.SibSp + self.train.Parch + 1
+        self.test['FamilySize'] = self.test.SibSp + self.test.Parch + 1
+        # PersonalFare
+        self.train['PersonalFare'] = self.train.Fare / self.train.FamilySize
+        self.test['PersonalFare'] = self.test.Fare / self.test.FamilySize
+
         self.train_survived = self.train.loc[:,['Survived']]
-        self.train = self.train.drop(['PassengerId', 'Survived', 'Name', 'Ticket', 'Cabin'], axis=1)
+        self.train = self.train.drop(['PassengerId', 'Survived', 'Name', 'Ticket'], axis=1)
         self.test_survived = self.real.loc[:,['Survived']]
-        self.test = self.test.drop(['PassengerId', 'Name', 'Ticket', 'Cabin'], axis=1)
+        self.test = self.test.drop(['PassengerId', 'Name', 'Ticket'], axis=1)
     """缺失值计算"""
     def missing_value_calculation(self, method='most_frequent'):
         """
@@ -334,9 +363,27 @@ class Titanic(object):
             data = data.drop(['Embarked'], axis=1)
             data = pd.concat([data, embarked], axis=1)
             return data
-        # 处理train和test
+        # 处理train
         self.train = processing(self.train)
+        # Cabin
+        dictvectorizer = DictVectorizer(sparse=False)
+        cabin = pd.DataFrame(dictvectorizer.fit_transform(self.train.loc[:,['Cabin']].to_dict(orient='records')), index=self.train.index, columns=['Cabin_A', 'Cabin_B', 'Cabin_C', 'Cabin_D', 'Cabin_E', 'Cabin_F', 'Cabin_G', 'Cabin_T', 'Cabin_U'])
+        self.train = self.train.drop(['Cabin'], axis=1)
+        if True:
+            self.train = pd.concat([self.train, cabin], axis=1)
+            # Cabin_U
+            self.train = self.train.drop(['Cabin_U'], axis=1)
+        # 处理test
         self.test = processing(self.test)
+        # Cabin
+        dictvectorizer = DictVectorizer(sparse=False)
+        cabin = pd.DataFrame(dictvectorizer.fit_transform(self.test.loc[:,['Cabin']].to_dict(orient='records')), index=self.test.index, columns=['Cabin_A', 'Cabin_B', 'Cabin_C', 'Cabin_D', 'Cabin_E', 'Cabin_F', 'Cabin_G', 'Cabin_U'])
+        self.test = self.test.drop(['Cabin'], axis=1)
+        if True:
+            self.test = pd.concat([self.test, cabin], axis=1)
+            self.test.insert(self.test.shape[1] - 1, 'Cabin_T', pd.DataFrame(0,index=self.test.index, columns=['Cabin_T']))
+            # Cabin_U
+            self.test = self.test.drop(['Cabin_U'], axis=1)
     """数据变换"""
     def data_variation(self):
         pass
@@ -350,29 +397,69 @@ class Titanic(object):
         是否完成:是
         ```
         """
-        minmaxscaler = MinMaxScaler()
-        self.train.loc[:,['Age']] = pd.DataFrame(minmaxscaler.fit_transform(self.train.loc[:,['Age']]), index=self.train.index, columns=['Age'])
-        self.train.loc[:,['Fare']] = pd.DataFrame(minmaxscaler.fit_transform(self.train.loc[:,['Fare']]), index=self.train.index, columns=['Fare'])
-        self.test.loc[:,['Age']] = pd.DataFrame(minmaxscaler.fit_transform(self.test.loc[:,['Age']]), index=self.test.index, columns=['Age'])
-        self.test.loc[:,['Fare']] = pd.DataFrame(minmaxscaler.fit_transform(self.test.loc[:,['Fare']]), index=self.test.index, columns=['Fare'])
+        scaler = MinMaxScaler()
+        self.train.loc[:,['Age']] = pd.DataFrame(scaler.fit_transform(self.train.loc[:,['Age']]), index=self.train.index, columns=['Age'])
+        self.train.loc[:,['Fare']] = pd.DataFrame(scaler.fit_transform(self.train.loc[:,['Fare']]), index=self.train.index, columns=['Fare'])
+        self.train.loc[:,['FamilySize']] = pd.DataFrame(scaler.fit_transform(self.train.loc[:,['FamilySize']]), index=self.train.index, columns=['FamilySize'])
+        self.train.loc[:,['PersonalFare']] = pd.DataFrame(scaler.fit_transform(self.train.loc[:,['PersonalFare']]), index=self.train.index, columns=['PersonalFare'])
+        self.test.loc[:,['Age']] = pd.DataFrame(scaler.fit_transform(self.test.loc[:,['Age']]), index=self.test.index, columns=['Age'])
+        self.test.loc[:,['Fare']] = pd.DataFrame(scaler.fit_transform(self.test.loc[:,['Fare']]), index=self.test.index, columns=['Fare'])
+        self.test.loc[:,['FamilySize']] = pd.DataFrame(scaler.fit_transform(self.test.loc[:,['FamilySize']]), index=self.test.index, columns=['FamilySize'])
+        self.test.loc[:,['PersonalFare']] = pd.DataFrame(scaler.fit_transform(self.test.loc[:,['PersonalFare']]), index=self.test.index, columns=['PersonalFare'])
     """特征选择"""
-    def feature_selection(self):
+    def feature_selection(self, method='xgbr'):
         """
         ```
         说明:特征选择
-        参数:无
-        用法:使用随机Lasso算法,选择特征
+        参数:method
+        用法:method选择算法,rl使用随机Lasso算法,rf使用随机森林算法
         是否完成:是
         ```
         """
-        rlasso = RandomizedLasso()
-        rlasso.fit(self.train,np.array(self.train_survived).ravel())
-        self.rlasso_scores = rlasso.all_scores_
-        self.train_reduced = self.train.drop(['SibSp', 'Parch', 'Pclass_2', 'Male', 'Embarked_Q'], axis=1)
-        # self.train_reduced = self.train.drop(['Age', 'SibSp', 'Parch', 'Pclass_2', 'Male', 'Embarked_Q'], axis=1)
-        self.test_reduced = self.test.drop(['SibSp', 'Parch', 'Pclass_2', 'Male', 'Embarked_Q'], axis=1)
-        # self.test_reduced = self.test.drop(['Age', 'SibSp', 'Parch', 'Pclass_2', 'Male', 'Embarked_Q'], axis=1)
-
+        # 其它
+        def other():
+            pass
+        # RandomLasso
+        def RLasso():
+            rlasso = RandomizedLasso(max_iter=1000)
+            rlasso.fit(self.train,np.array(self.train_survived).ravel())
+            self.rlasso_scores = pd.DataFrame(np.append(self.train.columns,rlasso.scores_).reshape((2,len(rlasso.scores_))).transpose(), columns=['Feature', 'score'])
+            # 作图
+            if False:
+                plt.plot(np.arange(self.rlasso_scores.score.shape[0]),self.rlasso_scores.score.sort_values(ascending=False))
+                plt.scatter(np.arange(self.rlasso_scores.score.shape[0]),self.rlasso_scores.score.sort_values(ascending=False))
+                plt.show()
+            # 丢弃部分特征
+            # self.train_reduced = self.train
+            self.train_reduced = self.train.drop(self.rlasso_scores.Feature[self.rlasso_scores.score<0.5].values, axis=1)
+            # self.train_reduced = self.train.drop(['Pclass_2', 'Male', 'Embarked_Q', 'Embarked_C'], axis=1)
+            # self.test_reduced = self.test
+            self.test_reduced = self.test.drop(self.rlasso_scores.Feature[self.rlasso_scores.score<0.5].values, axis=1)
+            # self.test_reduced = self.test.drop(['Pclass_2', 'Male', 'Embarked_Q', 'Embarked_C'], axis=1)
+        # RandomForest
+        def RForest():
+            rf = RandomForestRegressor(warm_start=True)
+            rf.fit(self.train, np.array(self.train_survived).ravel())
+            print(rf.feature_importances_)
+            model = SelectFromModel(rf, prefit=True)
+            self.train_reduced = pd.DataFrame(model.transform(self.train), index=self.train.index)
+            self.test_reduced = pd.DataFrame(model.transform(self.test), index=self.test.index)
+        # XGBRegressor
+        def XGBR():
+            xgbr = xgb.XGBRegressor()
+            xgbr.fit(self.train, np.array(self.train_survived).ravel())
+            print(xgbr.feature_importances_)
+            model = SelectFromModel(xgbr, prefit=True)
+            self.train_reduced = pd.DataFrame(model.transform(self.train), index=self.train.index)
+            self.test_reduced = pd.DataFrame(model.transform(self.test), index=self.test.index)
+        # 选择器
+        switcher = {
+            'rl':RLasso,
+            'rf':RForest,
+            'xgbr':XGBR
+        }
+        select = switcher.get(method, other)
+        return select()
     """降维"""
     def deminsionality_reduction(self, method='lda' ,n_components=10, svd_solver='full'):
         """
@@ -408,7 +495,7 @@ class Titanic(object):
         demin_reduce = switcher.get(method, other)
         return demin_reduce()
     """训练"""
-    def training(self, model='svm'):
+    def training(self, model='xgb'):
         """
         ```
         说明:训练模型
@@ -482,11 +569,99 @@ class Titanic(object):
             print('-'*14+' 结束 '+'-'*14+'\n')
             self.kernel = mlp
             print('10次10折交叉验证准确率:%f\n'%(np.mean(multi_scores)))
+        # XGB
+        def xgb_kernel():
+            print('-'*14+' XGB '+'-'*14+'\n')
+            params = {
+                # General Parameters
+                'booster':'gbtree',
+                'objective': 'binary:logistic', # 二分类的问题,损失函数Logistic
+                # Tree Booster Parameters
+                'gamma':0.1,  # 用于控制是否后剪枝的参数,越大越保守，一般0.1、0.2
+                'max_depth':8, # 构建树的深度，越大越容易过拟合
+                'lambda':2,  # 控制模型复杂度的权重值的L2正则化项参数，参数越大，模型越不容易过拟合
+                'subsample':0.7, # 随机采样训练样本
+                'colsample_bytree':0.7, # 生成树时进行的列采样
+                'min_child_weight':4, 
+                'silent':0,# 设置成1则没有运行信息输出，最好是设置为0
+                'eta': 0.1, # 如同学习率
+                'seed':1,
+                'nthread':5,# cpu 线程数
+                'eval_metric': 'auc'
+            }
+            params_list = list(params.items())
+            # Task Parameters
+            num_rounds = 1000 # 迭代次数
+            train_set,validation_set = train_test_split(pd.concat([self.train_reduced,self.train_survived], axis=1), test_size=0.3, random_state=np.random.RandomState(np.random.randint(2**32)))
+
+            xgb_train = xgb.DMatrix(train_set.drop(['Survived'], axis=1), label=train_set.Survived)
+            xgb_validation = xgb.DMatrix(validation_set.drop(['Survived'], axis=1), label=validation_set.Survived)
+            xgb_test = xgb.DMatrix(self.test_reduced)
+
+            watchlist = [(xgb_train, 'train'),(xgb_validation, 'val')]
+
+            print('-'*14+' 开始 '+'-'*14+'\n')
+
+            # 记录程序运行时间
+            import time 
+            start_time = time.time()
+            # 训练模型
+            model = xgb.train(params_list, xgb_train, num_rounds, watchlist, early_stopping_rounds=100)
+            # 获取运行时长
+            cost_time = time.time()-start_time
+            # 储存训练出的模型
+            model.save_model('xgb.model')
+            print("Best Ntree Limit:%d\n"%(model.best_ntree_limit))
+            
+            self.kernel = model
+            print(model.get_fscore())
+            
+            # 预测
+            predict = model.predict(xgb_test, ntree_limit=model.best_ntree_limit)
+            # 计算正确率
+            accuracy = metrics.accuracy_score(np.array(self.test_survived).squeeze(), np.array(np.round(predict).astype(int)))
+            print('测试集正确率:%f\n'%(accuracy))
+            # 分类报告及混淆矩阵
+            print("分类报告:")
+            print(classification_report(np.array(self.test_survived).squeeze(), np.array(np.round(predict).astype(int))))
+            print("混淆矩阵:")
+            print(confusion_matrix(np.array(self.test_survived).squeeze(), np.array(np.round(predict).astype(int))))
+            print('-'*14+' 结束 '+'-'*14+'\n')
+            print("运行时长:%d"%(cost_time)+"(s)\n")
+        # GridSearchCV
+        def gscv_kernel():
+            params = {
+                # General Parameters
+                'booster':['gbtree'],
+                'objective': ['binary:logistic'], # 二分类的问题,损失函数Logistic
+                # Tree Booster Parameters
+                'gamma':[0.1, 0.2],  # 用于控制是否后剪枝的参数,越大越保守，一般0.1、0.2
+                'max_depth':[6, 8, 10, 12], # 构建树的深度，越大越容易过拟合
+                'reg_lambda':[2],  # 控制模型复杂度的权重值的L2正则化项参数，参数越大，模型越不容易过拟合
+                'subsample':[0.7], # 随机采样训练样本
+                'colsample_bytree':[0.7], # 生成树时进行的列采样
+                'min_child_weight':[1, 2, 3, 4, 5], 
+                'silent':[0],# 设置成1则没有运行信息输出，最好是设置为0
+                'learning_rate': [0.1, 0.01, 0.001, 0.0001], # 如同学习率
+                # 'seed':np.random.randint(2**32),
+                'random_state':[1],
+                # 'nthread':5,# cpu 线程数
+                'n_jobs':[5],
+            }
+            xgbc = xgb.XGBClassifier()
+            # params_list = list(params.items())
+            self.kernel = GridSearchCV(xgbc, params, cv=10)
+            self.kernel.fit(self.train, np.array(self.train_survived).ravel())
+            self.cv_result = pd.DataFrame.from_dict(self.kernel.cv_results_)
+            print("模型最佳参数组合:")
+            print(self.kernel.best_params_)
         # 选择器
         switcher = {
             'knn':knn_kernel,
             'svm':svm_kernel,
-            'mlp':mlp_kernel
+            'mlp':mlp_kernel,
+            'xgb':xgb_kernel,
+            'gscv':gscv_kernel
         }
         model_train = switcher.get(model, other)
         return model_train()
